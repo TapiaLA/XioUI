@@ -19,9 +19,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -45,7 +48,7 @@ fun XioConsoleContent() {
         mutableStateOf(listOf(
             "Type 'help' for a list of available commands.",
             "Root privileges: GRANTED",
-            "Xio UI Terminal v2.0 (Native Shell Integration)"
+            "Xio UI Terminal v2.5 (Ubuntu Color Edition)"
         ))
     }
     var currentInput by remember { mutableStateOf("") }
@@ -53,20 +56,17 @@ fun XioConsoleContent() {
     val executeCommand = {
         val input = currentInput.trim()
         if (input.isNotEmpty()) {
-            currentInput = "" // Limpiamos la barra de inmediato para mayor fluidez
+            currentInput = ""
 
-            // Lanzamos un hilo secundario para no congelar la UI con comandos pesados
             coroutineScope.launch(Dispatchers.IO) {
                 val newBlock = mutableListOf<String>()
                 val args = input.lowercase().split(" ")
                 val command = args[0]
 
-                // 1. EL ECO DEL COMANDO
                 if (command != "clear") {
                     newBlock.add("sysadmin@xioui:~$ $input")
                 }
 
-                // 2. LÓGICA DE COMANDOS PROPIOS (Los que creamos nosotros)
                 when (command) {
                     "help" -> {
                         newBlock.add("Available commands:")
@@ -77,29 +77,6 @@ fun XioConsoleContent() {
                     "clear" -> {
                         withContext(Dispatchers.Main) { commandHistory = emptyList() }
                         return@launch
-                    }
-                    "ping" -> {
-                        val target = if (args.size > 1) args[1] else "8.8.8.8"
-                        newBlock.add("PING $target (Native Kotlin ICMP/TCP)...")
-
-                        try {
-                            // Usamos la librería nativa de red para hacer el ping real
-                            val inet = java.net.InetAddress.getByName(target)
-                            val isReachable = inet.isReachable(3000) // 3 segundos de timeout
-
-                            if (isReachable) {
-                                newBlock.add("64 bytes from $target: icmp_seq=1 time < 3000 ms")
-                                newBlock.add("64 bytes from $target: icmp_seq=2 time < 3000 ms")
-                                newBlock.add("64 bytes from $target: icmp_seq=3 time < 3000 ms")
-                                newBlock.add("--- $target ping statistics ---")
-                                newBlock.add("3 packets transmitted, 3 received, 0% packet loss")
-                            } else {
-                                newBlock.add("From $target icmp_seq=1 Destination Host Unreachable")
-                                newBlock.add("1 packets transmitted, 0 received, 100% packet loss")
-                            }
-                        } catch (e: Exception) {
-                            newBlock.add("ping: $target: Name or service not known")
-                        }
                     }
                     "neofetch" -> {
                         val model = Build.MODEL
@@ -125,10 +102,14 @@ fun XioConsoleContent() {
    /X|LANN/       |INK\X\   
    /´------------------`\   
                         """.trimIndent()
-                        newBlock.addAll(asciiArt.split("\n"))
+
+                        // Le agregamos un carácter secreto '§' al inicio para que nuestro
+                        // motor de renderizado sepa que esta línea lleva colores especiales.
+                        asciiArt.split("\n").forEach { line ->
+                            newBlock.add("§$line")
+                        }
                     }
                     else -> {
-                        // 3. MAGIA PURA: Si no es un comando nuestro, se lo pasamos al kernel real de Linux/Android
                         try {
                             val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", input))
                             val reader = BufferedReader(InputStreamReader(process.inputStream))
@@ -137,19 +118,16 @@ fun XioConsoleContent() {
                             var line: String?
                             var outputCount = 0
 
-                            // Leemos la respuesta exitosa del sistema
                             while (reader.readLine().also { line = it } != null) {
                                 newBlock.add(line!!)
                                 outputCount++
                             }
-                            // Leemos los errores del sistema (ej. Permission denied)
                             while (errorReader.readLine().also { line = it } != null) {
                                 newBlock.add("bash error: $line")
                                 outputCount++
                             }
 
-                            process.waitFor() // Esperamos a que termine de ejecutarse
-
+                            process.waitFor()
                             if (outputCount == 0) {
                                 newBlock.add("[Process completed silently]")
                             }
@@ -159,7 +137,6 @@ fun XioConsoleContent() {
                     }
                 }
 
-                // 4. REGRESAMOS AL HILO PRINCIPAL PARA ACTUALIZAR LA PANTALLA
                 withContext(Dispatchers.Main) {
                     if (command != "clear") {
                         commandHistory = newBlock + commandHistory
@@ -192,15 +169,61 @@ fun XioConsoleContent() {
         }
 
         LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
-            items(commandHistory) { line ->
-                // Si la línea es un error, la pintamos de rojo. Si es el usuario, verde. Si es salida normal, gris.
-                val textColor = when {
-                    line.startsWith("sysadmin@") -> Color(0xFF4CAF50) // Verde
-                    line.startsWith("bash error:") -> Color(0xFFFF5252) // Rojo
-                    else -> Color(0xFFE0E0E0) // Gris claro
+            items(commandHistory) { originalLine ->
+                // MOTOR DE RENDERIZADO CON ANNOTATED STRING
+                if (originalLine.startsWith("sysadmin@")) {
+                    val annotated = buildAnnotatedString {
+                        withStyle(SpanStyle(color = Color(0xFF4CAF50))) { append("sysadmin@xioui:~$ ") }
+                        withStyle(SpanStyle(color = Color.White)) { append(originalLine.removePrefix("sysadmin@xioui:~$ ")) }
+                    }
+                    Text(text = annotated, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                Text(text = line, color = textColor, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                if (line.startsWith("sysadmin@")) Spacer(modifier = Modifier.height(8.dp))
+                else if (originalLine.startsWith("§")) {
+                    val line = originalLine.removePrefix("§")
+                    val annotated = buildAnnotatedString {
+                        val limit = minOf(line.length, 26) // Respetando tu límite de 26 caracteres
+                        val artPart = line.substring(0, limit)
+                        val infoPart = line.substring(limit)
+
+                        // 1. RENDERIZAR EL ARTE (La N Roja y el compás Blanco)
+                        artPart.forEach { char ->
+                            if (char in listOf('N', 'I', 'K', 'L', 'A', 'U')) {
+                                // Las letras de tu marca en Rojo Ubuntu
+                                withStyle(SpanStyle(color = Color(0xFFFF5252))) { append(char.toString()) }
+                            } else if (char == 'X' || !char.isLetterOrDigit()) {
+                                // El compás de metal y su estructura en Blanco Puro
+                                withStyle(SpanStyle(color = Color.White)) { append(char.toString()) }
+                            } else {
+                                // Respaldo Gris por si acaso
+                                withStyle(SpanStyle(color = Color(0xFFB0BEC5))) { append(char.toString()) }
+                            }
+                        }
+
+                        // 2. RENDERIZAR LA INFORMACIÓN CON SUBTÍTULOS ROJOS
+                        val splitIndex = infoPart.indexOf(":")
+                        if (splitIndex != -1) {
+                            // Encontramos un ":", dividimos el texto
+                            val subtitle = infoPart.substring(0, splitIndex + 1) // Incluye los ":"
+                            val value = infoPart.substring(splitIndex + 1)
+
+                            // Pintamos el subtítulo (ej. "OS:") de Rojo Ubuntu
+                            withStyle(SpanStyle(color = Color(0xFFFF5252))) { append(subtitle) }
+                            // Pintamos el valor (ej. " Xio UI Android") de Gris
+                            withStyle(SpanStyle(color = Color(0xFFE0E0E0))) { append(value) }
+                        } else {
+                            // Si es una línea normal de la derecha sin ":", se queda gris
+                            withStyle(SpanStyle(color = Color(0xFFE0E0E0))) { append(infoPart) }
+                        }
+                    }
+                    Text(text = annotated, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
+                else if (originalLine.startsWith("bash error:")) {
+                    Text(text = originalLine, color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
+                else {
+                    Text(text = originalLine, color = Color(0xFFE0E0E0), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
             }
         }
     }
